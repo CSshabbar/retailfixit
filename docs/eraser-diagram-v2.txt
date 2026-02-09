@@ -1,0 +1,137 @@
+title RetailFixIt — System Architecture [color: white]
+
+// ============================================
+// MOBILE CLIENT
+// ============================================
+Mobile Client [color: green, icon: smartphone] {
+
+  Screens [icon: monitor] {
+    Login Screen [icon: log-in]
+    Job List Screen [icon: list]
+    Job Detail Screen [icon: file-text]
+    Create Job Screen [icon: plus-square]
+    Activity Screen [icon: activity]
+    Profile Screen [icon: user]
+  }
+
+  Mobile Services [icon: layers] {
+    Sync Engine [icon: refresh-cw]
+    SignalR Client [icon: zap]
+    API Client [icon: cloud]
+    Image Picker [icon: image]
+  }
+
+  Local Storage [icon: hard-drive] {
+    SQLite [icon: database, label: "SQLite (jobs, pending_actions, sync_meta)"]
+    SecureStore [icon: lock, label: "SecureStore (JWT tokens)"]
+  }
+}
+
+// ============================================
+// EXPRESS BACKEND
+// ============================================
+Express Backend [color: gray, icon: server] {
+
+  Middleware [icon: shield] {
+    Helmet [icon: shield]
+    CORS [icon: shuffle]
+    Gzip [icon: minimize-2]
+    Pino Logger [icon: file-text]
+    JWT Auth [icon: key]
+    RBAC [icon: users, label: "RBAC (admin, dispatcher, technician)"]
+  }
+
+  API Routes [icon: git-branch] {
+    GET /api/health [icon: heart]
+    POST /api/auth/login [icon: log-in]
+    GET /api/auth/technicians [icon: users]
+    GET /api/jobs [icon: list]
+    GET /api/jobs/:id [icon: file-text]
+    POST /api/jobs [icon: plus-square]
+    PATCH /api/jobs/:id/status [icon: edit-2]
+    POST /api/jobs/:id/assign [icon: user-check]
+    DELETE /api/jobs/:id [icon: trash-2]
+    POST /api/jobs/sync [icon: refresh-cw]
+    POST /api/jobs/:id/attachments [icon: upload]
+    DELETE /api/jobs/:id/attachments/:aid [icon: trash]
+    POST /api/signalr/negotiate [icon: message-circle]
+  }
+}
+
+// ============================================
+// AZURE CLOUD SERVICES
+// ============================================
+Azure Cloud Services [icon: cloud] {
+
+  Azure Cosmos DB [color: blue, icon: database] {
+    RetailFixItDB [icon: database]
+    Jobs [icon: folder, label: "Jobs (/tenantId)"]
+    Users [icon: folder, label: "Users (/tenantId)"]
+  }
+
+  Azure SignalR Service [color: purple, icon: zap] {
+    Hub [icon: message-circle, label: "Hub: retailfixit"]
+    Groups [icon: users, label: "vendor-*, user-*, admin"]
+    Events [icon: bell, label: "JobCreated, JobAssigned, StatusChanged, JobDeleted"]
+  }
+
+  Azure Blob Storage [color: orange, icon: image] {
+    Storage Account [icon: database, label: "attachmentsjob"]
+    Container [icon: folder, label: "job-attachments"]
+    SAS URLs [icon: link, label: "1-hour read-only SAS URLs"]
+  }
+}
+
+// ============================================
+// CONNECTIONS (clean, no duplicates)
+// ============================================
+
+// Mobile internal
+Screens > Mobile Services: user actions
+Mobile Services <> Local Storage: offline cache + token storage
+
+// Mobile <-> Backend (main data path)
+API Client > Express Backend: HTTPS REST (JSON, bearer token, gzip) {
+  style {
+    stroke: green
+    stroke-width: 3
+  }
+}
+
+// Mobile <-> SignalR (real-time)
+SignalR Client <> Azure SignalR Service: WSS WebSocket (real-time push) {
+  style {
+    stroke: purple
+    stroke-width: 3
+  }
+}
+
+// Backend <-> Azure Services
+Express Backend > Azure Cosmos DB: SDK (read/write jobs & users) {
+  style {
+    stroke: blue
+  }
+}
+Express Backend > Azure Blob Storage: SDK (upload/delete photos) {
+  style {
+    stroke: orange
+  }
+}
+Express Backend > Azure SignalR Service: REST API (broadcast events) {
+  style {
+    stroke: purple
+  }
+}
+
+// Mobile direct to Blob (SAS URL bypass)
+Mobile Services > Azure Blob Storage: direct photo download (SAS URL) {
+  style {
+    stroke: orange
+    stroke-dash: 5
+  }
+}
+
+// Sync Engine specifics
+Sync Engine > API Client: drain pending actions + delta sync
+Sync Engine > SQLite: upsert synced jobs
+SignalR Client > SQLite: cache real-time events
