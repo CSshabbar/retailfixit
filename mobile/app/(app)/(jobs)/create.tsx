@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,10 +14,11 @@ import {
 import { router } from 'expo-router';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useOffline } from '../../../contexts/OfflineContext';
-import { createJob } from '../../../services/jobs';
+import { createJob, assignJob, getVendors, getTechnicians } from '../../../services/jobs';
 import { enqueueAction } from '../../../services/actionQueue';
 import { PRIORITY_CONFIG } from '../../../constants/jobs';
 import type { JobPriority } from '../../../types/job';
+import type { Vendor, Technician } from '../../../services/jobs';
 
 const PRIORITIES: JobPriority[] = ['low', 'medium', 'high', 'urgent'];
 
@@ -37,12 +38,49 @@ export default function CreateJobScreen() {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Vendor & technician selection (admin only)
+  const isAdmin = user?.role === 'admin';
   const isDispatcher = user?.role === 'dispatcher';
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [selectedTechId, setSelectedTechId] = useState<string | null>(null);
+  const [loadingVendors, setLoadingVendors] = useState(false);
+  const [loadingTechs, setLoadingTechs] = useState(false);
+
+  // Fetch vendors for admin
+  useEffect(() => {
+    if (!isAdmin || !isOnline) return;
+    setLoadingVendors(true);
+    getVendors()
+      .then((v) => {
+        setVendors(v);
+        if (v.length > 0 && !vendorId) {
+          setVendorId(v[0].vendorId);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingVendors(false));
+  }, [isAdmin, isOnline]);
+
+  // Fetch technicians when vendor changes (admin only)
+  useEffect(() => {
+    if (!isAdmin || !isOnline || !vendorId) {
+      setTechnicians([]);
+      setSelectedTechId(null);
+      return;
+    }
+    setLoadingTechs(true);
+    setSelectedTechId(null);
+    getTechnicians(vendorId)
+      .then(setTechnicians)
+      .catch(() => setTechnicians([]))
+      .finally(() => setLoadingTechs(false));
+  }, [isAdmin, isOnline, vendorId]);
 
   const handleSubmit = async () => {
     if (!title.trim()) { setError('Title is required'); return; }
     if (!description.trim()) { setError('Description is required'); return; }
-    if (!vendorId.trim()) { setError('Vendor ID is required'); return; }
+    if (!vendorId.trim()) { setError('Vendor is required'); return; }
     if (!storeName.trim() || !address.trim() || !city.trim() || !state.trim() || !zipCode.trim()) {
       setError('All location fields are required');
       return;
@@ -71,7 +109,15 @@ export default function CreateJobScreen() {
 
     if (isOnline) {
       try {
-        await createJob(jobData);
+        const { data: created } = await createJob(jobData);
+        // If admin selected a technician, assign immediately
+        if (isAdmin && selectedTechId && created.id) {
+          try {
+            await assignJob(created.id, selectedTechId);
+          } catch {
+            // Job created but assignment failed — not critical
+          }
+        }
         router.back();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to create job');
@@ -140,17 +186,73 @@ export default function CreateJobScreen() {
             })}
           </View>
 
-          {/* Vendor ID */}
-          <Text style={styles.label}>Vendor ID</Text>
-          <TextInput
-            style={[styles.input, isDispatcher && styles.inputDisabled]}
-            placeholder="e.g. vendor-001"
-            placeholderTextColor="#9C9C90"
-            value={vendorId}
-            onChangeText={setVendorId}
-            editable={!isDispatcher && !isSubmitting}
-            autoCapitalize="none"
-          />
+          {/* Vendor — dropdown for admin, locked for dispatcher */}
+          <Text style={styles.label}>Vendor</Text>
+          {isAdmin ? (
+            loadingVendors ? (
+              <ActivityIndicator size="small" style={{ marginVertical: 12 }} />
+            ) : (
+              <View style={styles.chipRow}>
+                {vendors.map((v) => {
+                  const isActive = vendorId === v.vendorId;
+                  return (
+                    <TouchableOpacity
+                      key={v.vendorId}
+                      style={[styles.vendorChip, isActive && styles.vendorChipActive]}
+                      onPress={() => setVendorId(v.vendorId)}
+                      activeOpacity={0.7}
+                      disabled={isSubmitting}
+                    >
+                      <Text style={[styles.vendorChipText, isActive && styles.vendorChipTextActive]}>
+                        {v.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )
+          ) : (
+            <TextInput
+              style={[styles.input, isDispatcher && styles.inputDisabled]}
+              placeholder="e.g. vendor-001"
+              placeholderTextColor="#9C9C90"
+              value={vendorId}
+              onChangeText={setVendorId}
+              editable={!isDispatcher && !isSubmitting}
+              autoCapitalize="none"
+            />
+          )}
+
+          {/* Technician — admin only, filtered by selected vendor */}
+          {isAdmin && vendorId ? (
+            <>
+              <Text style={styles.label}>Assign Technician (optional)</Text>
+              {loadingTechs ? (
+                <ActivityIndicator size="small" style={{ marginVertical: 12 }} />
+              ) : technicians.length === 0 ? (
+                <Text style={styles.noTechText}>No technicians for this vendor</Text>
+              ) : (
+                <View style={styles.chipRow}>
+                  {technicians.map((t) => {
+                    const isActive = selectedTechId === t.id;
+                    return (
+                      <TouchableOpacity
+                        key={t.id}
+                        style={[styles.techChip, isActive && styles.techChipActive]}
+                        onPress={() => setSelectedTechId(isActive ? null : t.id)}
+                        activeOpacity={0.7}
+                        disabled={isSubmitting}
+                      >
+                        <Text style={[styles.techChipText, isActive && styles.techChipTextActive]}>
+                          {t.displayName}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </>
+          ) : null}
         </View>
 
         {/* Location */}
@@ -308,6 +410,58 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#6B6B60',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  vendorChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E3DB',
+    backgroundColor: '#FAFAF6',
+  },
+  vendorChipActive: {
+    backgroundColor: '#3C3A2E',
+    borderColor: '#3C3A2E',
+  },
+  vendorChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B6B60',
+  },
+  vendorChipTextActive: {
+    color: '#FFFFFF',
+  },
+  techChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E3DB',
+    backgroundColor: '#FAFAF6',
+  },
+  techChipActive: {
+    backgroundColor: '#2D6A4F',
+    borderColor: '#2D6A4F',
+  },
+  techChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B6B60',
+  },
+  techChipTextActive: {
+    color: '#FFFFFF',
+  },
+  noTechText: {
+    fontSize: 13,
+    color: '#9C9C90',
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   row: {
     flexDirection: 'row',

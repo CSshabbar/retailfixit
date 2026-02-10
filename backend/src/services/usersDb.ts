@@ -44,6 +44,27 @@ export async function getUserDisplayNames(userIds: string[]): Promise<Record<str
   return map;
 }
 
+/** Lists unique vendors derived from dispatcher accounts */
+export async function listVendors(): Promise<{ vendorId: string; name: string }[]> {
+  const container = getUsersContainer();
+
+  const { resources } = await container.items
+    .query<{ vendorId: string; displayName: string }>({
+      query: "SELECT c.vendorId, c.displayName FROM c WHERE c.role = 'dispatcher' AND c.vendorId != null",
+    })
+    .fetchAll();
+
+  // Deduplicate by vendorId, derive vendor name from dispatcher displayName
+  const vendorMap = new Map<string, string>();
+  for (const r of resources) {
+    if (!vendorMap.has(r.vendorId)) {
+      vendorMap.set(r.vendorId, r.displayName.replace(/ Dispatcher$/i, ''));
+    }
+  }
+
+  return [...vendorMap.entries()].map(([vendorId, name]) => ({ vendorId, name }));
+}
+
 /** Finds a user by email address. Returns null if not found. */
 export async function findUserByEmail(email: string): Promise<UserDocument | null> {
   const container = getUsersContainer();

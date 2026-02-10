@@ -77,6 +77,18 @@ export async function syncJobs(since: string | null): Promise<SyncResponse> {
   return data;
 }
 
+/** Vendor info returned by the API */
+export interface Vendor {
+  vendorId: string;
+  name: string;
+}
+
+/** Fetches unique vendors (admin only) */
+export async function getVendors(): Promise<Vendor[]> {
+  const { data } = await api.get<{ data: Vendor[] }>('/api/auth/vendors');
+  return data.data;
+}
+
 /** Technician info returned by the API */
 export interface Technician {
   id: string;
@@ -85,8 +97,9 @@ export interface Technician {
   vendorId: string;
 }
 
-/** Fetches technicians visible to the current user */
-export async function getTechnicians(): Promise<Technician[]> {
-  const { data } = await api.get<{ data: Technician[] }>('/api/auth/technicians');
+/** Fetches technicians, optionally filtered by vendorId */
+export async function getTechnicians(vendorId?: string): Promise<Technician[]> {
+  const query = vendorId ? `?vendorId=${encodeURIComponent(vendorId)}` : '';
+  const { data } = await api.get<{ data: Technician[] }>(`/api/auth/technicians${query}`);
   return data.data;
 }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { config } from '../config.js';
-import { findUserByEmail, listTechnicians } from '../services/usersDb.js';
+import { findUserByEmail, listTechnicians, listVendors } from '../services/usersDb.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { rbacMiddleware } from '../middleware/rbac.js';
 import type { JwtPayload } from '../types/auth.js';
@@ -68,6 +68,17 @@ authRouter.post('/login', async (req, res) => {
   });
 });
 
+/** GET /vendors — returns unique vendors (admin only) */
+authRouter.get(
+  '/vendors',
+  authMiddleware,
+  rbacMiddleware(['admin']),
+  async (_req, res) => {
+    const vendors = await listVendors();
+    res.json({ data: vendors });
+  },
+);
+
 /** GET /technicians — returns technicians visible to the current user */
 authRouter.get(
   '/technicians',
@@ -75,8 +86,13 @@ authRouter.get(
   rbacMiddleware(['admin', 'dispatcher']),
   async (req, res) => {
     const user = req.user!;
-    // Dispatchers only see their own vendor's technicians
-    const vendorId = user.role === 'dispatcher' ? user.vendorId : undefined;
+    // Dispatchers see own vendor; admins can optionally filter by vendorId query param
+    let vendorId: string | undefined;
+    if (user.role === 'dispatcher') {
+      vendorId = user.vendorId ?? undefined;
+    } else if (req.query.vendorId) {
+      vendorId = req.query.vendorId as string;
+    }
     const technicians = await listTechnicians(vendorId);
     res.json({ data: technicians });
   },
