@@ -24,8 +24,8 @@ interface OfflineContextType {
 
 const OfflineContext = createContext<OfflineContextType | null>(null);
 
-const SYNC_INTERVAL_MS = 10_000;          // 10s when no SignalR
-const SYNC_INTERVAL_REALTIME_MS = 30_000;  // 30s when SignalR active
+const SYNC_INTERVAL_MS = 4_000;            // 4s when no SignalR
+const SYNC_INTERVAL_REALTIME_MS = 10_000;  // 10s when SignalR active
 
 export function OfflineProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();

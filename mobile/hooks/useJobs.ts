@@ -33,11 +33,14 @@ export function useJobs(): UseJobsReturn {
 
   const fetchJobs = useCallback(async (showRefresh = false) => {
     if (showRefresh) setIsRefreshing(true);
-    else setIsLoading(true);
     setError('');
 
-    // Always load from SQLite first (instant)
-    loadFromCache();
+    // Always load from SQLite first (instant) — never blank the screen
+    const cached = getLocalJobs(db, activeFilter === 'all' ? undefined : activeFilter);
+    setJobs(cached);
+
+    // Only show full-screen spinner on first load with empty cache
+    if (cached.length === 0 && !showRefresh) setIsLoading(true);
 
     if (isOnline) {
       try {
@@ -46,7 +49,7 @@ export function useJobs(): UseJobsReturn {
         loadFromCache();
       } catch (err) {
         // If API fails, we still have cached data
-        if (jobs.length === 0) {
+        if (cached.length === 0) {
           setError(err instanceof Error ? err.message : 'Failed to sync jobs');
         }
       }
@@ -54,7 +57,7 @@ export function useJobs(): UseJobsReturn {
 
     setIsLoading(false);
     setIsRefreshing(false);
-  }, [isOnline, loadFromCache, triggerSync, jobs.length]);
+  }, [isOnline, db, activeFilter, loadFromCache, triggerSync]);
 
   // Re-fetch when screen gains focus or filter changes
   useFocusEffect(

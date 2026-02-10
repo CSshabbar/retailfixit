@@ -15,6 +15,8 @@ import {
 import { ApiError } from './api';
 
 const MAX_RETRIES = 3;
+const FULL_SYNC_EVERY = 5; // Force a full resync every N cycles to catch deletions
+let syncCycleCount = 0;
 
 export interface SyncResult {
   actionsProcessed: number;
@@ -27,6 +29,7 @@ export interface SyncResult {
  * Full sync cycle:
  * 1. Drain the offline action queue (writes before reads)
  * 2. Delta sync from server into SQLite
+ *    Every Nth cycle, force a full resync to catch deleted jobs
  */
 export async function performSync(database: SQLiteDatabase): Promise<SyncResult> {
   const result: SyncResult = {
@@ -85,11 +88,18 @@ export async function performSync(database: SQLiteDatabase): Promise<SyncResult>
 
   // ── Step 2: Delta sync from server ──────────────────────────
   try {
-    const since = getLastSyncTimestamp(database);
+    syncCycleCount++;
+    let since = getLastSyncTimestamp(database);
+
+    // Every Nth cycle, force a full resync to catch deleted jobs
+    if (since && syncCycleCount % FULL_SYNC_EVERY === 0) {
+      since = null;
+    }
+
     const syncResponse = await syncJobs(since);
 
     if (!since) {
-      // First sync (fresh login) — full replace to ensure role-based filtering
+      // Full sync — remove jobs that no longer exist on server
       database.runSync("DELETE FROM jobs WHERE syncStatus = 'synced'");
     }
 
