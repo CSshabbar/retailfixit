@@ -130,43 +130,71 @@ Mobile                    Backend              Blob Storage    Cosmos DB
 
 ## Azure Service Choices
 
-**Cosmos DB (NoSQL)** was chosen over Azure SQL for several reasons: the job document model (with embedded attachments array and flexible location fields) maps naturally to JSON documents; the `tenantId` partition key provides built-in vendor data isolation; native eTag support enables optimistic concurrency without application-level version tracking; and sub-10ms point reads ensure the mobile experience feels instant. The tradeoff is higher cost per write and weaker ad-hoc querying compared to SQL, but for a job-management workload that's predominantly read-heavy with known access patterns, this is acceptable.
+### Cosmos DB (NoSQL) — Why not Azure SQL?
 
-**Azure SignalR Service (Serverless mode)** was selected over implementing WebSocket handling directly in Express. Serverless mode means the backend uses REST API calls to broadcast events — the SignalR service handles all WebSocket connection management, scaling, and reconnection. This avoids the complexity of maintaining persistent connections on the backend and allows the Express server to remain stateless and horizontally scalable. The tradeoff is a slight increase in broadcast latency (~50-100ms for the REST call) compared to direct WebSocket, but this is imperceptible for job status updates.
+We picked Cosmos DB because our data fits naturally as JSON documents. A job has nested fields (location, attachments array) that would need multiple tables in SQL but are just one document in Cosmos DB.
 
-**Azure Blob Storage** stores photo attachments separately from Cosmos DB. Embedding binary data in documents would inflate RU costs and hit the 2MB document size limit quickly. Instead, attachment metadata is stored in Cosmos (small JSON), while the actual file lives in Blob Storage. SAS (Shared Access Signature) URLs provide time-limited, read-only access directly from the client, bypassing the backend for photo downloads and reducing server load.
+Other reasons:
+- **Built-in vendor isolation** — The `tenantId` partition key keeps each vendor's data separate at the database level
+- **Version control for free** — Cosmos DB gives every document an `_etag` that changes on every edit. We use this to detect conflicts without building our own versioning system
+- **Fast reads** — Under 10ms for single-document lookups, which makes the mobile app feel instant
+- **Pay-per-use pricing** — Serverless mode means we only pay for what we use during development
 
-**Express 5 (Node.js)** was chosen as the backend framework for its native async error handling (no need for `express-async-errors` wrappers), mature ecosystem, and team familiarity. TypeScript with strict mode catches type errors at compile time. ESM modules provide modern import/export syntax compatible with the latest Node.js features.
+**Tradeoff:** Cosmos DB costs more per write than SQL, and complex queries are harder. But our app is mostly reads (loading job lists), so this works well.
 
-| Service | Resource | Purpose | Why Chosen |
-|---------|----------|---------|------------|
-| **Cosmos DB** | `retailfixit-cosmos` | Primary database for Jobs & Users | Multi-model NoSQL with native partition support for multi-tenant; eTag for optimistic concurrency; sub-10ms reads at scale; serverless pricing for dev |
-| **SignalR Service** | `retailfixit-signalr` | Real-time push notifications | Serverless mode = no WebSocket management on Express; managed WebSocket scaling; group-based routing for vendor/user/admin channels |
-| **Blob Storage** | `attachmentsjob` | Photo attachment storage | Cost-effective binary storage; SAS URLs for time-limited direct access; CDN-ready; no database bloat from large files |
-| **App Service** | (deployment target) | Host Express backend | Managed Node.js hosting with auto-scale; built-in SSL; deployment slots for zero-downtime updates |
+### Azure SignalR Service — Why not handle WebSockets ourselves?
+
+We use SignalR in **Serverless mode**, which means our Express backend just makes REST API calls to broadcast events. SignalR handles all the WebSocket connections with clients.
+
+Why this is better than managing WebSockets directly in Express:
+- **No connection management** — SignalR handles thousands of client connections, reconnections, and scaling
+- **Backend stays simple** — Express just sends a REST call to broadcast, then moves on. No need to track open sockets
+- **Group-based routing** — We send updates to `vendor-{id}`, `user-{id}`, or `admin` groups. Only the right people get each message
+
+**Tradeoff:** There's a small delay (~50-100ms) because we make a REST call instead of pushing directly. But for job status updates, this is not noticeable.
+
+### Azure Blob Storage — Why not store photos in the database?
+
+Photos are stored in Blob Storage, not in Cosmos DB. Only the photo metadata (filename, upload date) is saved in the database.
+
+Why:
+- **Cosmos DB has a 2MB document limit** — A few photos would hit this quickly
+- **Photos are expensive to store in a database** — Cosmos DB charges per operation, and reading/writing large binary data wastes money
+- **Direct downloads** — We generate SAS URLs (temporary links valid for 1 hour) so the phone downloads photos directly from Blob Storage, without going through our backend
+
+### Express 5 (Node.js) — Backend framework
+
+We chose Express 5 because:
+- **Native async error handling** — No need for extra wrappers, async errors are caught automatically
+- **TypeScript** — Catches bugs at compile time instead of in production
+- **ESM modules** — Modern import/export syntax that works with the latest Node.js
+
+| Service | Resource | What it does | Why we chose it |
+|---------|----------|-------------|-----------------|
+| **Cosmos DB** | `retailfixit-cosmos` | Stores jobs and users | JSON documents, vendor isolation via partition key, built-in version tags, fast reads |
+| **SignalR Service** | `retailfixit-signalr` | Pushes real-time updates | Manages all WebSocket connections for us, group-based message routing |
+| **Blob Storage** | `attachmentsjob` | Stores job photos | Cheap file storage, temporary download links, keeps database small |
+| **App Service** | (deployment target) | Hosts the backend | Managed Node.js hosting, auto-restart, SSL included |
 
 ## Mobile Sync & Offline Strategy
 
-### Architecture: SQLite-First
+### How it works: SQLite-First
 
-Every screen reads from a local SQLite database first, providing instant display regardless of network state. The sync engine runs in the background, with two distinct phases:
+Every screen loads data from a local SQLite database on the phone first. This means the app opens instantly, even with no internet. The sync engine runs in the background and does two things:
 
-1. **Drain writes (pending_actions queue):** Offline mutations are stored as action records with type (`CREATE_JOB`, `UPDATE_STATUS`) and payload. On sync, these are processed FIFO — writes always execute before reads to prevent stale server data from overwriting the user's intent.
+1. **Send local changes first** — If you made changes while offline (like starting a job), the app sends those to the server first. This way, your changes don't get overwritten by older server data.
 
-2. **Delta pull (server → local):** After writes drain, `POST /api/jobs/sync { since: lastSyncTimestamp }` fetches only jobs modified since the last sync. The `skipPending` flag prevents server responses from overwriting jobs that have local pending changes.
+2. **Then download new data** — After sending your changes, the app asks the server: "What changed since my last sync?" The server only sends jobs that were modified, not the entire list. This saves data and battery.
 
-### Conflict Resolution Strategy
+### What happens when two people edit the same job?
 
-The system uses **optimistic concurrency with user-assisted resolution**:
+Every job has a version tag (`_etag`). When you try to update a job, the server checks if someone else already changed it. If they did, you get a conflict.
 
-- Every job status update includes the Cosmos DB `_etag` field
-- If another user modified the job concurrently, the server returns 409 Conflict
-- The sync engine marks the local job as `syncStatus: 'conflict'`
-- The UI shows a red conflict banner with two options:
-  - **"Use Server Version"** — fetches the latest version from the API, discards local changes
-  - **"Retry My Change"** — re-queues the action with a fresh eTag
+The app shows the user two choices:
+- **"Use Server Version"** — Keep what the other person did, throw away your change
+- **"Retry My Change"** — Get the latest version and try again
 
-This approach avoids silent data loss (unlike last-writer-wins) while remaining simple for field technicians who need quick resolution. Automatic merge was considered but rejected — for status transitions, there's no sensible merge (you can't merge "completed" and "cancelled").
+We don't auto-pick a winner because that's dangerous. Example: a technician marks a job "completed" while offline, but a dispatcher cancels the same job. There's no way to automatically merge "completed" and "cancelled" — the user needs to decide.
 
 ### Sync Scheduling
 
@@ -206,14 +234,14 @@ This approach avoids silent data loss (unlike last-writer-wins) while remaining 
    └─ Same broadcast pattern; job moves to completed list
 ```
 
-### Event Routing via Groups
+### Who gets notified?
 
-SignalR groups eliminate unnecessary broadcasts:
-- `vendor-{vendorId}`: All dispatchers and technicians in a vendor see relevant job changes
-- `user-{userId}`: Personal notifications (e.g., job assigned to you)
-- `admin`: Platform operators see everything
+We use SignalR groups so only the right people get each update:
+- `vendor-{vendorId}` — Everyone in that vendor (dispatchers + technicians) sees the change
+- `user-{userId}` — Personal notifications (e.g., "a job was assigned to you")
+- `admin` — Admins see everything
 
-The backend uses `Promise.allSettled()` for broadcast calls — if one group delivery fails, others still proceed. Broadcast failures are logged but never block the API response.
+If sending to one group fails, the others still go through. Broadcast errors are logged but never slow down the API response.
 
 ## RBAC Model
 
@@ -241,7 +269,7 @@ The backend uses `Promise.allSettled()` for broadcast calls — if one group del
    └─────────┘ └─────────┘  └─────────┘ └─────────┘
 ```
 
-**Data Partitioning:** Jobs and Users are partitioned by `tenantId` (= `vendorId`), ensuring vendor data isolation at the database level. Admin uses cross-partition queries to aggregate across vendors.
+**How data is separated:** Each vendor's data is stored under its own `tenantId` in the database. This means Vendor A can never see Vendor B's jobs. Admins can see across all vendors.
 
 ## Automation vs Manual Controls
 
@@ -260,27 +288,42 @@ The backend uses `Promise.allSettled()` for broadcast calls — if one group del
 
 ## Key Tradeoffs
 
-**Speed vs Consistency:** Optimistic UI updates provide instant feedback. The tradeoff is temporary inconsistency — a user might briefly see a status they set locally that later gets rejected (409 conflict). The conflict resolution UI mitigates this by making the inconsistency visible and actionable.
+### Speed vs Accuracy
 
-**Simplicity vs Feature-Richness:**
-- No Service Bus / Event Grid: Direct REST API broadcasting from Express is simpler and sufficient for ~1,000 vendors. Service Bus would add complexity and cost without clear benefit at this scale.
-- No Redis cache: Cosmos DB sub-10ms reads are fast enough. Redis would add an infrastructure component to manage.
-- No Azure AD B2C: Custom JWT auth is simpler for a demo and avoids external identity provider configuration. Production would likely migrate to B2C for SSO and MFA.
+We update the UI instantly when a user taps a button (optimistic UI). The actual server sync happens in the background. The downside? A user might briefly see a status that the server later rejects (conflict). But we handle this with a clear conflict banner so nothing is silently lost.
 
-**Cost vs Performance:**
-- Cosmos DB serverless mode (pay-per-request) keeps costs low during development. Production would switch to provisioned throughput with autoscale for predictable costs.
-- SAS URLs allow direct blob access from mobile, offloading download traffic from the Express server.
-- Delta sync (`since` timestamp) reduces data transfer compared to full refresh — only changed jobs are sent.
+### We kept it simple on purpose
 
-**Offline-First vs Real-Time:** Both coexist: SQLite provides offline resilience while SignalR provides real-time push when connected. The sync engine bridges the gap — it processes queued actions when connectivity returns and pulls latest state from the server. This dual approach ensures the app is usable in basements, warehouses, and other connectivity-challenged environments that field technicians operate in.
+Things we chose NOT to use, and why:
 
-## Encryption & PII Handling
+| What we skipped | Why |
+|----------------|-----|
+| Azure Service Bus / Event Grid | REST API broadcasting from Express is simpler and works fine for ~1,000 vendors |
+| Redis cache | Cosmos DB reads are already under 10ms — adding Redis would be extra complexity for no benefit |
+| Azure AD B2C | Custom JWT auth is simpler for this project. In production, we'd switch to B2C for single sign-on and multi-factor auth |
 
-| Layer | Protection |
-|-------|-----------|
-| In-transit | HTTPS/TLS for all API calls; WSS for SignalR |
-| At-rest | Azure-managed encryption for Cosmos DB & Blob Storage |
-| Tokens | SecureStore (Keychain/Keystore) on mobile devices |
-| Passwords | bcrypt hashing with salt rounds |
-| Attachments | SAS URLs with 1-hour read-only expiry; no permanent public access |
-| PII | User email/name stored in Cosmos DB; technicians only see assigned job data |
+### Saving money
+
+- **Pay-per-use database** — Cosmos DB serverless mode means we only pay for actual operations, not reserved capacity
+- **Direct photo downloads** — Phones download photos directly from Blob Storage using temporary links, so our backend doesn't handle that traffic
+- **Delta sync** — Only changed jobs are sent during sync, not the full list. This saves bandwidth and battery
+
+### Offline and real-time work together
+
+The app doesn't choose between offline and real-time — it uses both:
+- **SQLite** keeps the app working when there's no internet
+- **SignalR** pushes live updates when there is internet
+- **The sync engine** bridges the gap — it sends queued changes when connectivity returns and downloads anything it missed
+
+This means the app works in basements, warehouses, and areas with bad signal — exactly where field technicians work.
+
+## Security & Data Protection
+
+| What | How it's protected |
+|------|-------------------|
+| Network traffic | All API calls use HTTPS. SignalR uses WSS (encrypted WebSocket) |
+| Data in database | Azure encrypts Cosmos DB and Blob Storage automatically |
+| Login tokens | Stored in the phone's secure storage (Keychain on iOS, Keystore on Android) |
+| Passwords | Hashed with bcrypt — we never store plain text passwords |
+| Photos | Temporary download links that expire after 1 hour. No permanent public URLs |
+| Personal data | Technicians can only see jobs assigned to them. Dispatchers only see their own vendor's data |
