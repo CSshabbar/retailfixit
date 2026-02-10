@@ -339,7 +339,7 @@ For production, integrate Application Insights for automatic dependency tracking
 | Conflict rate (409/PATCH) | < 2% | > 5% for 15 min |
 | SignalR broadcast failure | < 0.1% | > 1% for 5 min |
 | Cosmos DB RU consumption | < 80% provisioned | > 90% for 10 min |
-| App Service CPU | < 70% | > 85% for 10 min |
+| App Service CPU (production) | < 70% | > 85% for 10 min |
 
 ### Distributed Tracing
 
@@ -347,17 +347,19 @@ Each API request carries a correlation ID (`x-request-id`) linking mobile → Ex
 
 ## Deployment Guide
 
-### Azure Resource Inventory
+### Current Setup (Development)
 
-| Service | Resource Name | SKU/Tier | Purpose |
-|---------|--------------|----------|---------|
-| Resource Group | `retailfixit-demo` | — | Container for all resources |
-| Cosmos DB | `retailfixit-cosmos` | Serverless | Primary database |
-| SignalR Service | `retailfixit-signalr` | Free/Standard (Serverless) | Real-time push |
-| Blob Storage | `attachmentsjob` | Standard LRS | Photo attachments |
-| App Service | (deployment target) | B1/S1 | Host Express backend |
+The backend runs locally on your machine (`localhost:3000`) and connects to Azure cloud services over the internet. No App Service is used.
 
-### Azure CLI Provisioning
+| Service | Resource Name | Status | Purpose |
+|---------|--------------|--------|---------|
+| Cosmos DB | `retailfixit-cosmos` | **Active** | Stores jobs and users |
+| SignalR Service | `retailfixit-signalr` | **Active** | Real-time push updates |
+| Blob Storage | `attachmentsjob` | **Active** | Stores job photos |
+
+### Azure CLI — Provisioning the active services
+
+These are the commands used to create the Azure resources this project connects to:
 
 ```bash
 # Resource Group
@@ -385,35 +387,41 @@ az storage account create --name attachmentsjob --resource-group retailfixit-dem
   --location chilecentral --sku Standard_LRS --kind StorageV2
 az storage container create --name job-attachments \
   --account-name attachmentsjob --public-access off
+```
 
-# App Service
+### Production Deployment Plan
+
+For production, the Express backend would be deployed to **Azure App Service** instead of running locally. This is the recommended setup:
+
+```bash
+# App Service (production only — not used in development)
 az appservice plan create --name retailfixit-plan --resource-group retailfixit-demo \
   --location chilecentral --sku B1 --is-linux
 az webapp create --name retailfixit-api --resource-group retailfixit-demo \
   --plan retailfixit-plan --runtime "NODE:18-lts"
 ```
 
-### Scaling (Production)
+### Scaling Recommendations (Production)
 
-| Service | Dev Tier | Production Recommendation |
-|---------|----------|--------------------------|
-| Cosmos DB | Serverless | Autoscale 400-4000 RU/s |
-| App Service | B1 (1 core) | S1 with autoscale (2-5 instances, CPU > 70%) |
-| SignalR | Free (20 conn) | Standard (2-3 units, ~3000 connections) |
+| Service | Current (Dev) | Production Recommendation |
+|---------|--------------|--------------------------|
+| Cosmos DB | Serverless (pay-per-use) | Autoscale 400-4000 RU/s |
+| App Service | Not used (local dev) | S1 with autoscale (2-5 instances, CPU > 70%) |
+| SignalR | Free (20 connections) | Standard (2-3 units, ~3000 connections) |
 | Blob Storage | Standard LRS | Standard LRS + lifecycle policy (365-day cleanup) |
 
 ### Cost Estimates
 
 | Environment | Monthly Cost |
 |-------------|-------------|
-| Development | ~$20-35 |
-| Production (~1,000 vendors) | ~$310-730 |
+| Development (current) | ~$20-35 (Cosmos + SignalR + Blob only) |
+| Production (~1,000 vendors) | ~$310-730 (adds App Service + scaled tiers) |
 
 ### Resilience
 
-| Failure | Mitigation |
-|---------|-----------|
-| Cosmos DB outage | Health check returns 503; mobile reads from SQLite cache |
-| SignalR outage | Mobile falls back to 10s polling; no data loss |
-| Blob Storage outage | Photo upload fails gracefully; existing SAS URLs cached |
-| App Service crash | Auto-restart; multi-instance with autoscale |
+| Failure | What happens |
+|---------|-------------|
+| Cosmos DB outage | Health check returns error; mobile app keeps working from SQLite cache |
+| SignalR outage | App falls back to polling every 10 seconds; no data is lost |
+| Blob Storage outage | Photo upload fails with a message; existing photos still load from cached URLs |
+| Backend down (production) | App Service auto-restarts; mobile app uses cached data until it recovers |
