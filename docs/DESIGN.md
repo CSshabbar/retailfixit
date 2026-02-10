@@ -174,7 +174,8 @@ We chose Express 5 because:
 | **Cosmos DB** | `retailfixit-cosmos` | Stores jobs and users | JSON documents, vendor isolation via partition key, built-in version tags, fast reads |
 | **SignalR Service** | `retailfixit-signalr` | Pushes real-time updates | Manages all WebSocket connections for us, group-based message routing |
 | **Blob Storage** | `attachmentsjob` | Stores job photos | Cheap file storage, temporary download links, keeps database small |
-| **App Service** | (deployment target) | Hosts the backend | Managed Node.js hosting, auto-restart, SSL included |
+
+> **Note:** The backend runs locally during development (`localhost:3000`). For production, it would be deployed to **Azure App Service** for managed hosting, auto-restart, and SSL.
 
 ## Mobile Sync & Offline Strategy
 
