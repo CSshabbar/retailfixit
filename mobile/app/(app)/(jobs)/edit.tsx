@@ -72,6 +72,11 @@ export default function EditJobScreen() {
   const handleSave = async () => {
     if (!job || !job._etag) return;
 
+    if (!isOnline) {
+      setError('You must be online to edit a job');
+      return;
+    }
+
     if (!title.trim()) { setError('Title is required'); return; }
     if (!description.trim()) { setError('Description is required'); return; }
     if (!storeName.trim() || !address.trim() || !city.trim() || !state.trim() || !zipCode.trim()) {
@@ -239,10 +244,11 @@ export default function EditJobScreen() {
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+        {!isOnline && <Text style={styles.offlineHint}>Editing requires an internet connection</Text>}
         <TouchableOpacity
-          style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+          style={[styles.submitButton, (isSubmitting || !isOnline) && styles.submitButtonDisabled]}
           onPress={handleSave}
-          disabled={isSubmitting}
+          disabled={isSubmitting || !isOnline}
           activeOpacity={0.7}
         >
           {isSubmitting ? (
@@ -359,5 +365,11 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  offlineHint: {
+    color: '#C4432B',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 8,
   },
 });
