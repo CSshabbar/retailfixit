@@ -119,7 +119,13 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
 
     // Bidirectional health poll: detect going offline AND coming back online
     let consecutiveFailures = 0;
+    let lastPollState = isOnlineRef.current;
     const pollTimer = setInterval(async () => {
+      // Reset counter when state changed externally (e.g. by NetInfo)
+      if (isOnlineRef.current !== lastPollState) {
+        consecutiveFailures = 0;
+        lastPollState = isOnlineRef.current;
+      }
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3000);
@@ -136,7 +142,6 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         consecutiveFailures++;
-        // Mark offline after 2 consecutive failures to avoid false positives
         if (consecutiveFailures >= 2 && isOnlineRef.current) goOffline();
       }
     }, 3000);
