@@ -117,20 +117,27 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // Fallback: ping backend health endpoint every 3s while offline
+    // Bidirectional health poll: detect going offline AND coming back online
+    let consecutiveFailures = 0;
     const pollTimer = setInterval(async () => {
-      if (!isOnlineRef.current) {
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 3000);
-          const res = await fetch(`${config.apiBaseUrl}/api/health`, {
-            signal: controller.signal,
-          });
-          clearTimeout(timeout);
-          if (res.ok) goOnline();
-        } catch {
-          // still offline
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(`${config.apiBaseUrl}/api/health`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          consecutiveFailures = 0;
+          if (!isOnlineRef.current) goOnline();
+        } else {
+          consecutiveFailures++;
+          if (consecutiveFailures >= 2 && isOnlineRef.current) goOffline();
         }
+      } catch {
+        consecutiveFailures++;
+        // Mark offline after 2 consecutive failures to avoid false positives
+        if (consecutiveFailures >= 2 && isOnlineRef.current) goOffline();
       }
     }, 3000);
 
