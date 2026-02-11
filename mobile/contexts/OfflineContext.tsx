@@ -16,7 +16,7 @@ interface OfflineContextType {
   isSyncing: boolean;
   pendingCount: number;
   lastSyncError: string | null;
-  triggerSync: () => Promise<void>;
+  triggerSync: (forceFullSync?: boolean) => Promise<void>;
   db: SQLiteDatabase;
   isRealTimeConnected: boolean;
   lastEventTimestamp: string | null;
@@ -43,14 +43,14 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     setPendingCount(getPendingCount(dbRef.current));
   }, []);
 
-  const triggerSync = useCallback(async () => {
+  const triggerSync = useCallback(async (forceFullSync = false) => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
     setIsSyncing(true);
     setLastSyncError(null);
 
     try {
-      await performSync(dbRef.current);
+      await performSync(dbRef.current, forceFullSync);
       refreshPendingCount();
       // Notify hooks that cache has new data so they reload
       setLastEventTimestamp(new Date().toISOString());
@@ -83,19 +83,29 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
 
   // Monitor network status
   const isOnlineRef = useRef(true);
+  const wasOfflineRef = useRef(false);
 
   const goOnline = useCallback(() => {
+    if (!isOnlineRef.current) {
+      wasOfflineRef.current = true; // mark that we're coming back from offline
+    }
     isOnlineRef.current = true;
-    setIsOnline((prev) => {
-      if (!prev) triggerSync();
-      return true;
-    });
-  }, [triggerSync]);
+    setIsOnline(true);
+  }, []);
 
   const goOffline = useCallback(() => {
     isOnlineRef.current = false;
+    wasOfflineRef.current = false;
     setIsOnline(false);
   }, []);
+
+  // When transitioning offline → online, force a full sync immediately
+  useEffect(() => {
+    if (isOnline && wasOfflineRef.current) {
+      wasOfflineRef.current = false;
+      triggerSync(true); // forceFullSync = true to catch deletions + drain queue
+    }
+  }, [isOnline, triggerSync]);
 
   useEffect(() => {
     // Primary: NetInfo listener for instant offline detection

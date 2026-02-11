@@ -66,12 +66,21 @@ export function useJobs(): UseJobsReturn {
     }, [fetchJobs])
   );
 
-  // Auto-refresh when a SignalR event updates the cache
+  // Auto-refresh when a sync completes or SignalR event updates the cache
   useEffect(() => {
     if (lastEventTimestamp) {
       loadFromCache();
     }
   }, [lastEventTimestamp, loadFromCache]);
+
+  // Re-sync when connectivity is restored
+  useEffect(() => {
+    if (isOnline) {
+      // Small delay to let the reconnect full-sync complete first
+      const timer = setTimeout(() => loadFromCache(), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isOnline, loadFromCache]);
 
   const refresh = useCallback(() => {
     fetchJobs(true);

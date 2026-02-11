@@ -30,8 +30,9 @@ export interface SyncResult {
  * 1. Drain the offline action queue (writes before reads)
  * 2. Delta sync from server into SQLite
  *    Every Nth cycle, force a full resync to catch deleted jobs
+ *    Pass forceFullSync=true after reconnect to immediately catch deletions
  */
-export async function performSync(database: SQLiteDatabase): Promise<SyncResult> {
+export async function performSync(database: SQLiteDatabase, forceFullSync = false): Promise<SyncResult> {
   const result: SyncResult = {
     actionsProcessed: 0,
     actionsFailed: 0,
@@ -91,8 +92,8 @@ export async function performSync(database: SQLiteDatabase): Promise<SyncResult>
     syncCycleCount++;
     let since = getLastSyncTimestamp(database);
 
-    // Every Nth cycle, force a full resync to catch deleted jobs
-    if (since && syncCycleCount % FULL_SYNC_EVERY === 0) {
+    // Force full resync on reconnect or every Nth cycle to catch deleted jobs
+    if (forceFullSync || (since && syncCycleCount % FULL_SYNC_EVERY === 0)) {
       since = null;
     }
 
